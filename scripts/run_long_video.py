@@ -10,7 +10,8 @@ so the methods' per-frame outputs line up frame for frame. Each clip goes to
         --frames <dir of jpg> --window 8 --out <dir>
 
 Each npz: frames (n,) int32; depth (n,H,W) f16 metres; flow (n,2,H,W) f16 pixels (a
-clip's last frame is 0 -- it has no successor inside the clip).
+clip's last frame is 0 -- it has no successor inside the clip); xyz (n,3,H,W) f16
+camera-frame points.
 """
 
 from __future__ import annotations
@@ -62,7 +63,8 @@ def main():
         tmp = dest.with_suffix(".tmp.npz")
         np.savez_compressed(tmp, frames=np.asarray(idx, np.int32),
                             depth=d["depth"][:, 0].half().cpu().numpy(),
-                            flow=d["flow"].half().cpu().numpy())
+                            flow=d["flow"].half().cpu().numpy(),
+                            xyz=d["xyz"].half().cpu().numpy())
         tmp.rename(dest)
         done += 1
         if done % 25 == 0 or ci == len(clips) - 1:

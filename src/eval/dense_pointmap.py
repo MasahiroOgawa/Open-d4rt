@@ -23,6 +23,7 @@ layout; a consumer wanting a batch axis adds it.
     out = dense_depth_and_flow(model, video)      # video: (1, N, 3, H, W)
     out["depth"]                                   # (N, 1, H, W) metres
     out["flow"]                                    # (N, 2, H, W) pixels, last frame 0
+    out["xyz"]                                     # (N, 3, H, W) camera-frame points
 """
 
 from __future__ import annotations
@@ -31,8 +32,11 @@ from typing import Any
 
 import torch
 
-from src.eval.tasks import (_encode_model_memory, _model_clip_frames,
-                            _run_model_for_queries)
+from src.eval.tasks import (
+    _encode_model_memory,
+    _model_clip_frames,
+    _run_model_for_queries,
+)
 
 
 def max_clip_frames(model: Any) -> int:
@@ -60,11 +64,11 @@ def min_clip_frames(model: Any) -> int:
 @torch.no_grad()
 def dense_depth_and_flow(model: Any, video: torch.Tensor,
                          query_chunk: int = 4096) -> dict[str, torch.Tensor]:
-    """Per-pixel depth and forward flow for one clip.
+    """Per-pixel depth, forward flow and camera-frame points for one clip.
 
-    ``video``: ``(1, N, 3, H, W)``. Returns ``depth`` ``(N, 1, H, W)`` in metres and
-    ``flow`` ``(N, 2, H, W)`` in pixels, the final frame's flow being zero because it
-    has no successor.
+    ``video``: ``(1, N, 3, H, W)``. Returns ``depth`` ``(N, 1, H, W)`` in metres,
+    ``flow`` ``(N, 2, H, W)`` in pixels (the final frame's flow is zero because it has no
+    successor) and ``xyz`` ``(N, 3, H, W)``, each pixel's point in its own camera frame.
     """
     if video.dim() != 5 or video.shape[0] != 1:
         raise ValueError(f"expected one clip shaped (1, N, 3, H, W), got {tuple(video.shape)}")
@@ -99,13 +103,14 @@ def dense_depth_and_flow(model: Any, video: torch.Tensor,
     scale = torch.tensor([max(w - 1, 1), max(h - 1, 1)], dtype=torch.float32)
     memory = _encode_model_memory(model, video, None)
 
-    depth, flow = [], []
+    depth, flow, xyz = [], [], []
     for t in range(n):
         ts = torch.full_like(u, float(t))
         same = _run_model_for_queries(
             model, video, None,
             {"u": u, "v": v, "t_src": ts, "t_tgt": ts, "t_cam": ts}, query_chunk, memory)
         depth.append(same["xyz_3d"][:, 2].reshape(1, h, w).clamp_min(0))
+        xyz.append(same["xyz_3d"].reshape(h, w, 3).permute(2, 0, 1))
         if t + 1 < n:
             nxt = _run_model_for_queries(
                 model, video, None,
@@ -120,7 +125,8 @@ def dense_depth_and_flow(model: Any, video: torch.Tensor,
     # (1, N, H, W) -- the same element count, so nothing raises, but it presents N
     # frames as N channels of one frame and every downstream metric reads garbage.
     return {"depth": torch.stack(depth, 0)[:n_real],
-            "flow": torch.stack(flow, 0)[:n_real]}
+            "flow": torch.stack(flow, 0)[:n_real],
+            "xyz": torch.stack(xyz, 0)[:n_real]}
 
 
 def load_checkpoint(ckpt_path: str, device: str = "cpu"):
